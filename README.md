@@ -1,13 +1,13 @@
 # Panoptes
-True asynchronous cURL requests for PHP 8.1 or later.
+True asynchronous cURL requests for PHP 8.2 or later.
 
 In Greek mythology, Argus was tasked with the important job of guarding Io, ever-vigilant with his hundred eyes. Similarly, the PHP cURL library keeps watch over numerous web requests, processing them concurrently and asynchronously. Each "eye" or thread in the library can independently initiate a cURL request, wait for the server's response, and process the received data, all without blocking the execution of other tasks. This concurrent handling mimics the way Argus could keep an eye on multiple things at once, never missing a detail.
 
 ## Features
 
-- **True Asynchronous Processing**: Leverages PHP 8.1 Fibers for non-blocking concurrent requests
+- **True Asynchronous Processing**: Leverages PHP 8.2 Fibers for non-blocking concurrent requests
 - **Request Prioritization**: Control the order of request processing with priority levels
-- **Progress Tracking**: Real-time monitoring of request status, attempts, and timing
+- **Progress Tracking**: Real-time monitoring of request status and download progress
 - **Stream Support**: Memory-efficient handling of large responses through streaming
 - **Automatic Retries**: Configurable retry mechanism with delay control
 - **PSR-18 Compliant**: Implements PHP-FIG HTTP Client interface standards
@@ -16,7 +16,7 @@ In Greek mythology, Argus was tasked with the important job of guarding Io, ever
 
 ## Requirements
 
-- PHP 8.1 or later
+- PHP 8.2 or later
 - PHP cURL extension
 - Composer
 
@@ -52,24 +52,59 @@ $responses = $client->promiseAll();
 
 ```php
 // High priority request (processed first)
-$highPriority = new CurlRequest(
-    'https://api.example.com/critical',
-    priority: 10
-);
+$request = new CurlRequest('https://api.example.com/critical');
+$request->setPriority(3); // Higher number = higher priority
 
-// Normal priority request
-$normalPriority = new CurlRequest(
-    'https://api.example.com/normal'
-);
+// Medium priority request
+$request2 = new CurlRequest('https://api.example.com/normal');
+$request2->setPriority(2);
 
-$client->addRequests([$highPriority, $normalPriority]);
+// Low priority request
+$request3 = new CurlRequest('https://api.example.com/background');
+$request3->setPriority(1);
+
+$client->addRequests([$request, $request2, $request3]);
 ```
 
-### Streaming Response
+### Progress Tracking
+
+```php
+$request = new CurlRequest('https://api.example.com/large-file');
+
+// Track download progress
+$request->onProgress(function($dlTotal, $dlNow, $ulTotal, $ulNow) {
+    $progress = ($dlTotal > 0) ? ($dlNow / $dlTotal) * 100 : 0;
+    echo "Download progress: {$progress}%\n";
+});
+
+// Track request lifecycle
+$request->onStart(function() {
+    echo "Request started\n";
+});
+
+$request->onFinish(function() {
+    echo "Request completed\n";
+});
+
+$client->addRequest($request);
+$responses = $client->promiseAll();
+```
+
+### Retry Mechanism
+
+```php
+$request = new CurlRequest('https://api.example.com/flaky');
+$request->setMaxAttempts(3);      // Maximum number of attempts
+$request->setRetryDelay(1000);    // Delay in milliseconds between retries
+
+$client->addRequest($request);
+```
+
+### Stream Response
 
 ```php
 // Create client with streaming enabled
-$client = new AsyncCurl(streamResponses: true);
+$client = new AsyncCurl(maxConcurrency: 1, streamResponses: true);
 
 // Create request with stream handling
 $request = new CurlRequest('https://api.example.com/large-file');
@@ -85,89 +120,23 @@ $request->setCallback(function($response) {
 $client->addRequest($request);
 ```
 
-### Retry Mechanism
+### Custom Headers and POST Data
 
 ```php
-// Configure retries with delay
-$request = new CurlRequest('https://api.example.com/flaky');
-$request->setRetries(
-    retries: 3,        // Number of retry attempts
-    delay: 1000        // Delay in milliseconds between retries
-);
-```
-
-### Progress Tracking
-
-```php
-$client->addRequests([/* ... */]);
-
-// Start requests
-$fiber = new Fiber(function() use ($client) {
-    return $client->promiseAll();
-});
-$fiber->start();
-
-// Check progress while requests are running
-while ($fiber->isSuspended()) {
-    $progress = $client->getProgress();
-    echo "Completed: {$progress['completed']} / {$progress['total']}\n";
-    
-    // Show details of each request
-    foreach ($progress['details'] as $detail) {
-        echo "Status: {$detail['status']}\n";
-        if (isset($detail['http_code'])) {
-            echo "HTTP Code: {$detail['http_code']}\n";
-        }
-        if (isset($detail['total_time'])) {
-            echo "Time: {$detail['total_time']}s\n";
-        }
-    }
-    
-    sleep(1);
-}
-```
-
-### Custom Headers and Options
-
-```php
-$request = new CurlRequest('https://api.example.com/data');
-
-// Add custom headers
-$request->setHeaders([
-    'Authorization' => 'Bearer ' . $token,
-    'Accept' => 'application/json',
-    'X-Custom-Header' => 'value'
-]);
-
-// Set cURL options using type-safe enum
-$request->setOption(RequestOptions::TIMEOUT, 30);
-$request->setOption(RequestOptions::FOLLOW_LOCATION, true);
-$request->setOption(RequestOptions::SSL_VERIFY_PEER, true);
-```
-
-### POST Requests with Data
-
-```php
-// JSON POST request
 $request = new CurlRequest(
     'https://api.example.com/users',
     method: 'POST',
-    headers: ['Content-Type: application/json'],
+    headers: [
+        'Content-Type: application/json',
+        'Authorization: Bearer token123'
+    ],
     postFields: json_encode([
         'name' => 'John Doe',
         'email' => 'john@example.com'
     ])
 );
 
-// Form POST request
-$request = new CurlRequest(
-    'https://api.example.com/upload',
-    method: 'POST',
-    postFields: [
-        'field1' => 'value1',
-        'field2' => 'value2'
-    ]
-);
+$client->addRequest($request);
 ```
 
 ### Error Handling
@@ -179,46 +148,32 @@ use Panoptes\Exception\PanoptesException;
 try {
     $responses = $client->promiseAll();
 } catch (RequestException $e) {
-    // Get detailed error context
-    $context = $e->getContext();
-    echo "Failed requests:\n";
-    foreach ($context['errors'] as $error) {
-        echo "URL: {$error['context']['url']}\n";
-        echo "Method: {$error['context']['method']}\n";
-        echo "Attempts: {$error['context']['attempts']}\n";
-        echo "Error: {$error['message']}\n";
-    }
+    echo "Request failed: " . $e->getMessage() . "\n";
+    echo "HTTP Code: " . $e->getCode() . "\n";
 } catch (PanoptesException $e) {
-    // Handle other library errors
-    echo "Library error: " . $e->getMessage();
+    echo "Library error: " . $e->getMessage() . "\n";
 }
 ```
 
-## PSR-18 Integration
+## Testing
 
-Panoptes implements PSR-18's `ClientInterface`, making it compatible with any PSR-18 HTTP client consumer:
+Run the test suite:
 
-```php
-use Psr\Http\Client\ClientInterface;
-use Psr\Http\Message\RequestInterface;
+```bash
+composer test
+```
 
-class MyService {
-    public function __construct(
-        private ClientInterface $client
-    ) {}
-    
-    public function fetchData(RequestInterface $request) {
-        return $this->client->sendRequest($request);
-    }
-}
+Generate code coverage report:
 
-// Use Panoptes as PSR-18 client
-$service = new MyService(new AsyncCurl());
+```bash
+composer test-coverage
 ```
 
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+Please make sure to update tests as appropriate.
 
 ## License
 
