@@ -23,7 +23,7 @@ In Greek mythology, Argus was tasked with the important job of guarding Io, ever
 ## Installation
 
 ```bash
-composer require codeium/panoptes
+composer require ...
 ```
 
 ## Quick Start
